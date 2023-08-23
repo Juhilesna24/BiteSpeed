@@ -4,9 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsc && node dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+    "start": "node dist/index.js",
+    "dev": "npx tsc --watch",
+    "dev-server": "nodemon dist/index.js"
+  },  
   "keywords": [],
   "author": "Juhilesna Mohammed",
   "license": "ISC",
