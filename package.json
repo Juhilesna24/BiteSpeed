@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node dist/index.js",
-    "dev": "npx tsc --watch",
-    "dev-server": "nodemon dist/index.js"
-  },  
+    "build": "tsc"
+  }
+  ,  
   "keywords": [],
   "author": "Juhilesna Mohammed",
   "license": "ISC",
