@@ -4,7 +4,8 @@
 
 1. Clone the repository.
 3. Install dependencies: `npm install`.
-4. Start the development server: `npm run dev`.
+4. Build the development server `npm start`.
+5. Start the development server: `npm run dev`.
 
 ## Project Description
 
