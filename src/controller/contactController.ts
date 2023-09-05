@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Pool, Client } from 'pg';
 import { Contact } from '../model/contact';
-import { dbConfig } from '../config/dbConfig';
+import dbConfig  from '../config/dbConfig';
 
 async function createContactTableIfNotExists(client: Client) {
   const createTableQuery = `

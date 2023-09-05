@@ -1,8 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.identifyContact = void 0;
 const pg_1 = require("pg");
-const dbConfig_1 = require("../config/dbConfig");
+const dbConfig_1 = __importDefault(require("../config/dbConfig"));
 async function createContactTableIfNotExists(client) {
     const createTableQuery = `
     CREATE TABLE IF NOT EXISTS Contact (
@@ -211,7 +214,7 @@ async function identifyContact(req, res) {
     const { email, phoneNumber } = req.body;
     let client;
     try {
-        client = new pg_1.Client(dbConfig_1.dbConfig);
+        client = new pg_1.Client(dbConfig_1.default);
         await client.connect();
         await createContactTableIfNotExists(client);
         await identifyAndProcessContact(client, email, phoneNumber, res);
