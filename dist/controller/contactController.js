@@ -1,33 +1,30 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.identifyContact = void 0;
-const promise_1 = __importDefault(require("mysql2/promise"));
+const pg_1 = require("pg");
 const dbConfig_1 = require("../config/dbConfig");
-async function createContactTableIfNotExists(connection) {
+async function createContactTableIfNotExists(client) {
     const createTableQuery = `
     CREATE TABLE IF NOT EXISTS Contact (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+      id SERIAL PRIMARY KEY,
       phoneNumber VARCHAR(20),
       email VARCHAR(255),
       linkedId INT,
-      linkPrecedence ENUM('primary', 'secondary'),
-      createdAt DATETIME,
-      updatedAt DATETIME,
-      deletedAt DATETIME
+      linkPrecedence VARCHAR(10),
+      createdAt TIMESTAMP,
+      updatedAt TIMESTAMP,
+      deletedAt TIMESTAMP
     )
   `;
-    await connection.execute(createTableQuery);
+    await client.query(createTableQuery);
 }
-async function fetchMatchingContacts(connection, email, phoneNumber) {
+async function fetchMatchingContacts(client, email, phoneNumber) {
     const query = `
     SELECT * 
     FROM Contact 
-    WHERE email = ? OR phoneNumber = ?
+    WHERE email = $1 OR phoneNumber = $2
   `;
-    const [rows] = await connection.execute(query, [email, phoneNumber]);
+    const { rows } = await client.query(query, [email, phoneNumber]);
     return rows.map((row) => ({
         id: row.id,
         phoneNumber: row.phoneNumber,
@@ -39,10 +36,11 @@ async function fetchMatchingContacts(connection, email, phoneNumber) {
         deletedAt: row.deletedAt,
     }));
 }
-async function insertNewContact(connection, newContact) {
+async function insertNewContact(client, newContact) {
     const insertQuery = `
     INSERT INTO Contact (phoneNumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id
   `;
     const insertValues = [
         newContact.phoneNumber,
@@ -53,14 +51,14 @@ async function insertNewContact(connection, newContact) {
         newContact.updatedAt,
         newContact.deletedAt,
     ];
-    const [insertResult] = await connection.execute(insertQuery, insertValues);
-    return insertResult.insertId;
+    const result = await client.query(insertQuery, insertValues);
+    return result.rows[0].id;
 }
-async function updatePrimaryToSecondary(connection, updateContact) {
+async function updatePrimaryToSecondary(client, updateContact) {
     const updateQuery = `
     UPDATE Contact
-    SET linkedId = ?, linkPrecedence = ?, updatedAt = ?
-    WHERE id = ?
+    SET linkedId = $1, linkPrecedence = $2, updatedAt = $3
+    WHERE id = $4
   `;
     const updateValues = [
         updateContact.linkedId,
@@ -69,7 +67,7 @@ async function updatePrimaryToSecondary(connection, updateContact) {
         updateContact.id,
     ];
     try {
-        await connection.execute(updateQuery, updateValues);
+        await client.query(updateQuery, updateValues);
         return true;
     }
     catch (error) {
@@ -77,9 +75,9 @@ async function updatePrimaryToSecondary(connection, updateContact) {
         return false;
     }
 }
-async function identifyAndProcessContact(connection, email, phoneNumber, res) {
+async function identifyAndProcessContact(client, email, phoneNumber, res) {
     // Fetch matching contacts
-    const matchingContacts = await fetchMatchingContacts(connection, email, phoneNumber);
+    const matchingContacts = await fetchMatchingContacts(client, email, phoneNumber);
     if (matchingContacts.length === 0) {
         // No matching contact found, create a new primary contact
         const newContact = {
@@ -92,7 +90,7 @@ async function identifyAndProcessContact(connection, email, phoneNumber, res) {
             updatedAt: new Date(),
             deletedAt: null,
         };
-        const contactId = await insertNewContact(connection, newContact);
+        const contactId = await insertNewContact(client, newContact);
         return res.status(200).json({
             contact: {
                 primaryContactId: contactId,
@@ -125,7 +123,7 @@ async function identifyAndProcessContact(connection, email, phoneNumber, res) {
                 createdAt: secondaryContactToUpdate.createdAt,
                 deletedAt: null
             };
-            await updatePrimaryToSecondary(connection, updateContact);
+            await updatePrimaryToSecondary(client, updateContact);
             // Update the secondary contact in the array
             secondaryContacts.push(updateContact);
             // Create an array of unique email and phone numbers
@@ -160,14 +158,14 @@ async function identifyAndProcessContact(connection, email, phoneNumber, res) {
             updatedAt: new Date(),
             deletedAt: null,
         };
-        const contactId = await insertNewContact(connection, newContact);
+        const contactId = await insertNewContact(client, newContact);
         newContact.id = contactId;
         secondaryContacts.push(newContact);
         // Create an array of unique email and phone numbers
-        const uniqueEmails = Array.from(new Set([
+        const uniqueEmails = new Set([
             primaryContact.email,
             ...secondaryContacts.map((c) => c.email),
-        ]));
+        ]);
         const uniquePhoneNumbers = Array.from(new Set([
             primaryContact.phoneNumber,
             ...secondaryContacts.map((c) => c.phoneNumber),
@@ -211,19 +209,20 @@ async function findDuplicateOrConflict(matchingContacts, email, phoneNumber) {
 }
 async function identifyContact(req, res) {
     const { email, phoneNumber } = req.body;
-    let connection;
+    let client;
     try {
-        connection = await promise_1.default.createConnection(dbConfig_1.dbConfig);
-        await createContactTableIfNotExists(connection);
-        await identifyAndProcessContact(connection, email, phoneNumber, res);
+        client = new pg_1.Client(dbConfig_1.dbConfig);
+        await client.connect();
+        await createContactTableIfNotExists(client);
+        await identifyAndProcessContact(client, email, phoneNumber, res);
     }
     catch (error) {
         console.error('Error while querying the database:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
     finally {
-        if (connection) {
-            connection.end();
+        if (client) {
+            await client.end();
         }
     }
 }

@@ -1,32 +1,32 @@
 import { Request, Response } from 'express';
-import mysql from 'mysql2/promise';
+import { Pool, Client } from 'pg';
 import { Contact } from '../model/contact';
 import { dbConfig } from '../config/dbConfig';
 
-async function createContactTableIfNotExists(connection: mysql.Connection) {
+async function createContactTableIfNotExists(client: Client) {
   const createTableQuery = `
     CREATE TABLE IF NOT EXISTS Contact (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+      id SERIAL PRIMARY KEY,
       phoneNumber VARCHAR(20),
       email VARCHAR(255),
       linkedId INT,
-      linkPrecedence ENUM('primary', 'secondary'),
-      createdAt DATETIME,
-      updatedAt DATETIME,
-      deletedAt DATETIME
+      linkPrecedence VARCHAR(10),
+      createdAt TIMESTAMP,
+      updatedAt TIMESTAMP,
+      deletedAt TIMESTAMP
     )
   `;
 
-  await connection.execute(createTableQuery);
+  await client.query(createTableQuery);
 }
 
-async function fetchMatchingContacts(connection: mysql.Connection, email: string, phoneNumber: string) {
+async function fetchMatchingContacts(client: Client, email: string, phoneNumber: string) {
   const query = `
     SELECT * 
     FROM Contact 
-    WHERE email = ? OR phoneNumber = ?
+    WHERE email = $1 OR phoneNumber = $2
   `;
-  const [rows] = await connection.execute<mysql.RowDataPacket[]>(query, [email, phoneNumber]);
+  const { rows } = await client.query(query, [email, phoneNumber]);
   return rows.map((row: any) => ({
     id: row.id,
     phoneNumber: row.phoneNumber,
@@ -39,11 +39,13 @@ async function fetchMatchingContacts(connection: mysql.Connection, email: string
   }));
 }
 
-async function insertNewContact(connection: mysql.Connection, newContact: Contact) {
+async function insertNewContact(client: Client, newContact: Contact) {
   const insertQuery = `
     INSERT INTO Contact (phoneNumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id
   `;
+
   const insertValues = [
     newContact.phoneNumber,
     newContact.email,
@@ -54,15 +56,15 @@ async function insertNewContact(connection: mysql.Connection, newContact: Contac
     newContact.deletedAt,
   ];
 
-  const [insertResult] = await connection.execute<mysql.ResultSetHeader>(insertQuery, insertValues);
-  return insertResult.insertId;
+  const result = await client.query(insertQuery, insertValues);
+  return result.rows[0].id;
 }
 
-async function updatePrimaryToSecondary(connection: mysql.Connection, updateContact: Contact) {
+async function updatePrimaryToSecondary(client: Client, updateContact: Contact) {
   const updateQuery = `
     UPDATE Contact
-    SET linkedId = ?, linkPrecedence = ?, updatedAt = ?
-    WHERE id = ?
+    SET linkedId = $1, linkPrecedence = $2, updatedAt = $3
+    WHERE id = $4
   `;
   const updateValues = [
     updateContact.linkedId,
@@ -72,7 +74,7 @@ async function updatePrimaryToSecondary(connection: mysql.Connection, updateCont
   ];
 
   try {
-    await connection.execute(updateQuery, updateValues);
+    await client.query(updateQuery, updateValues);
     return true;
   } catch (error) {
     console.error('Error while updating contact:', error);
@@ -80,14 +82,14 @@ async function updatePrimaryToSecondary(connection: mysql.Connection, updateCont
   }
 }
 
-async function identifyAndProcessContact(connection: mysql.Connection, email: string, phoneNumber: string, res: Response) {
+async function identifyAndProcessContact(client: Client, email: string, phoneNumber: string, res: Response) {
   // Fetch matching contacts
-  const matchingContacts = await fetchMatchingContacts(connection, email, phoneNumber);
+  const matchingContacts = await fetchMatchingContacts(client, email, phoneNumber);
 
   if (matchingContacts.length === 0) {
     // No matching contact found, create a new primary contact
     const newContact: Contact = {
-      id: 0, // it will be auto generated while insert in db
+      id: 0, // it will be auto-generated while insert in the db
       phoneNumber,
       email,
       linkedId: null,
@@ -97,7 +99,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
       deletedAt: null,
     };
 
-    const contactId = await insertNewContact(connection, newContact);
+    const contactId = await insertNewContact(client, newContact);
     return res.status(200).json({
       contact: {
         primaryContactId: contactId,
@@ -116,7 +118,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
   }
 
   const secondaryContacts = matchingContacts.filter(
-    (contact) => contact.linkPrecedence === 'secondary'
+    (contact: { linkPrecedence: string; }) => contact.linkPrecedence === 'secondary'
   );
 
   const primaryContactsToUpdate = matchingContacts.filter((each: Contact) => {
@@ -139,7 +141,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
         deletedAt: null
       };
 
-      await updatePrimaryToSecondary(connection, updateContact);
+      await updatePrimaryToSecondary(client, updateContact);
 
       // Update the secondary contact in the array
       secondaryContacts.push(updateContact);
@@ -147,12 +149,12 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
       // Create an array of unique email and phone numbers
       const uniqueEmails = Array.from(new Set([
         getPrimaryContact.email,
-        ...secondaryContacts.map((c) => c.email),
+        ...secondaryContacts.map((c: { email: any; }) => c.email),
       ]));
 
       const uniquePhoneNumbers = Array.from(new Set([
         getPrimaryContact.phoneNumber,
-        ...secondaryContacts.map((c) => c.phoneNumber),
+        ...secondaryContacts.map((c: { phoneNumber: any; }) => c.phoneNumber),
       ]));
 
       return res.status(200).json({
@@ -160,7 +162,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
           primaryContactId: getPrimaryContact.id,
           emails: uniqueEmails,
           phoneNumbers: uniquePhoneNumbers,
-          secondaryContactIds: secondaryContacts.map((c) => c.id),
+          secondaryContactIds: secondaryContacts.map((c: { id: any; }) => c.id),
         },
       });
     }
@@ -168,7 +170,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
 
   // find primary contact to add secondary contact
   const primaryContact: Contact | undefined = matchingContacts.find(
-    (contact) => contact.linkPrecedence === 'primary'
+    (contact: { linkPrecedence: string; }) => contact.linkPrecedence === 'primary'
   );
 
   if (primaryContact) {
@@ -183,19 +185,19 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
       deletedAt: null,
     };
 
-    const contactId = await insertNewContact(connection, newContact);
+    const contactId = await insertNewContact(client, newContact);
     newContact.id = contactId;
     secondaryContacts.push(newContact);
 
     // Create an array of unique email and phone numbers
-    const uniqueEmails = Array.from(new Set([
+    const uniqueEmails = new Set([
       primaryContact.email,
-      ...secondaryContacts.map((c) => c.email),
-    ]));
+      ...secondaryContacts.map((c: { email: any; }) => c.email),
+    ]);
 
     const uniquePhoneNumbers = Array.from(new Set([
       primaryContact.phoneNumber,
-      ...secondaryContacts.map((c) => c.phoneNumber),
+      ...secondaryContacts.map((c: { phoneNumber: any; }) => c.phoneNumber),
     ]));
 
     return res.status(200).json({
@@ -203,7 +205,7 @@ async function identifyAndProcessContact(connection: mysql.Connection, email: st
         primaryContactId: primaryContact.id,
         emails: uniqueEmails,
         phoneNumbers: uniquePhoneNumbers,
-        secondaryContactIds: secondaryContacts.map((c) => c.id),
+        secondaryContactIds: secondaryContacts.map((c: { id: any; }) => c.id),
       },
     });
   } else {
@@ -238,24 +240,25 @@ async function findDuplicateOrConflict(matchingContacts: Contact[], email: strin
     return true;
   }
 
-  return false
+  return false;
 }
 
 export async function identifyContact(req: Request, res: Response) {
   const { email, phoneNumber } = req.body;
-  let connection;
+  let client;
 
   try {
-    connection = await mysql.createConnection(dbConfig);
-    await createContactTableIfNotExists(connection);
+    client = new Client(dbConfig);
+    await client.connect();
+    await createContactTableIfNotExists(client);
 
-    await identifyAndProcessContact(connection, email, phoneNumber, res);
+    await identifyAndProcessContact(client, email, phoneNumber, res);
   } catch (error) {
     console.error('Error while querying the database:', error);
     res.status(500).json({ error: 'Internal server error' });
   } finally {
-    if (connection) {
-      connection.end();
+    if (client) {
+      await client.end();
     }
   }
 }
