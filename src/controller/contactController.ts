@@ -7,7 +7,7 @@ async function createContactTableIfNotExists(client: PoolClient) {
   const createTableQuery = `
     CREATE TABLE IF NOT EXISTS Contact (
       id SERIAL PRIMARY KEY,
-      phoneNumber VARCHAR(20),
+      phonenumber VARCHAR(20),
       email VARCHAR(255),
       linkedId INT,
       linkPrecedence VARCHAR(10),
@@ -20,34 +20,26 @@ async function createContactTableIfNotExists(client: PoolClient) {
   await client.query(createTableQuery);
 }
 
-async function fetchMatchingContacts(client: PoolClient, email: string, phoneNumber: string) {
+async function fetchMatchingContacts(client: PoolClient, email: string, phonenumber: string) {
   const query = `
-    SELECT * 
-    FROM Contact 
-    WHERE email = $1 OR phoneNumber = $2
-  `;
-  const { rows } = await client.query(query, [email, phoneNumber]);
-  return rows.map((row: any) => ({
-    id: row.id,
-    phoneNumber: row.phoneNumber,
-    email: row.email,
-    linkedId: row.linkedId,
-    linkPrecedence: row.linkPrecedence,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    deletedAt: row.deletedAt,
-  }));
+  SELECT id, phonenumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt
+  FROM Contact 
+  WHERE email = $1 OR phonenumber = $2
+`;
+  const { rows } = await client.query(query, [email, phonenumber]);
+  return rows;
 }
+
 
 async function insertNewContact(client: PoolClient, newContact: Contact) {
   const insertQuery = `
-    INSERT INTO Contact (phoneNumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id
+  INSERT INTO Contact (phonenumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  RETURNING id, phonenumber
   `;
 
   const insertValues = [
-    newContact.phoneNumber,
+    newContact.phonenumber,
     newContact.email,
     newContact.linkedId,
     newContact.linkPrecedence,
@@ -82,15 +74,15 @@ async function updatePrimaryToSecondary(client: PoolClient, updateContact: Conta
   }
 }
 
-async function identifyAndProcessContact(client: PoolClient, email: string, phoneNumber: string, res: Response) {
+async function identifyAndProcessContact(client: PoolClient, email: string, phonenumber: string, res: Response) {
   // Fetch matching contacts
-  const matchingContacts = await fetchMatchingContacts(client, email, phoneNumber);
+  const matchingContacts = await fetchMatchingContacts(client, email, phonenumber);
 
   if (matchingContacts.length === 0) {
     // No matching contact found, create a new primary contact
     const newContact: Contact = {
       id: 0, // it will be auto-generated while insert in the db
-      phoneNumber,
+      phonenumber,
       email,
       linkedId: null,
       linkPrecedence: 'primary',
@@ -104,14 +96,14 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
       contact: {
         primaryContactId: contactId,
         emails: [newContact.email],
-        phoneNumbers: [newContact.phoneNumber],
+        phoneNumbers: [newContact.phonenumber],
         secondaryContactIds: [],
       }
     });
   }
 
   // Handle duplicate and conflict cases
-  const duplicateOrConflict = await findDuplicateOrConflict(matchingContacts, email, phoneNumber);
+  const duplicateOrConflict = await findDuplicateOrConflict(matchingContacts, email, phonenumber);
   if (duplicateOrConflict) {
     return res.status(400).json({ Error: 'Email and Phone Number Already Exist' });
   }
@@ -121,7 +113,7 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
   );
 
   const primaryContactsToUpdate = matchingContacts.filter((each: Contact) => {
-    return each.linkPrecedence === 'primary' && (each.email === email || each.phoneNumber === phoneNumber);
+    return each.linkPrecedence === 'primary' && (each.email === email || each.phonenumber === phonenumber);
   });
 
   if (primaryContactsToUpdate.length > 1) {
@@ -132,7 +124,7 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
       const updateContact: Contact = {
         id: secondaryContactToUpdate.id,
         email: secondaryContactToUpdate.email,
-        phoneNumber: secondaryContactToUpdate.phoneNumber,
+        phonenumber: secondaryContactToUpdate.phonenumber,
         linkedId: getPrimaryContact.id,
         linkPrecedence: 'secondary',
         updatedAt: new Date(),
@@ -152,8 +144,8 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
       ]));
 
       const uniquePhoneNumbers = Array.from(new Set([
-        getPrimaryContact.phoneNumber,
-        ...secondaryContacts.map((c: { phoneNumber: any; }) => c.phoneNumber),
+        getPrimaryContact.phonenumber,
+        ...secondaryContacts.map((c: { phonenumber: any; }) => c.phonenumber),
       ]));
 
       return res.status(200).json({
@@ -175,7 +167,7 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
   if (primaryContact) {
     const newContact: Contact = {
       id: 0,
-      phoneNumber,
+      phonenumber,
       email,
       linkedId: primaryContact.id,
       linkPrecedence: 'secondary',
@@ -195,8 +187,8 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
     ]);
 
     const uniquePhoneNumbers = Array.from(new Set([
-      primaryContact.phoneNumber,
-      ...secondaryContacts.map((c: { phoneNumber: any; }) => c.phoneNumber),
+      primaryContact.phonenumber,
+      ...secondaryContacts.map((c: { phonenumber: any; }) => c.phonenumber),
     ]));
 
     return res.status(200).json({
@@ -215,19 +207,19 @@ async function identifyAndProcessContact(client: PoolClient, email: string, phon
   }
 }
 
-async function findDuplicateOrConflict(matchingContacts: Contact[], email: string, phoneNumber: string) {
+async function findDuplicateOrConflict(matchingContacts: Contact[], email: string, phonenumber: string) {
   // Your duplicate and conflict checking logic here
   const duplicateCheck = matchingContacts.filter((eachRow: Contact) => {
-    return (eachRow.email === email && eachRow.phoneNumber === phoneNumber);
+    return (eachRow.email === email && eachRow.phonenumber == phonenumber);
   });
 
   const checkConflictPrimaryEmail = matchingContacts.find((each: Contact) => {
-    return each.linkPrecedence === 'primary' && (each.phoneNumber === phoneNumber || each.email === email);
+    return each.linkPrecedence == 'primary' && (each.phonenumber == phonenumber || each.email == email);
   });
 
   if (checkConflictPrimaryEmail) {
     const checkConflictSecondaryEmail = matchingContacts.find((each: Contact) => {
-      return (each.linkPrecedence === 'secondary' && each.linkedId === checkConflictPrimaryEmail.id && (each.phoneNumber === phoneNumber || each.email === email));
+      return (each.linkPrecedence == 'secondary' && each.linkedId == checkConflictPrimaryEmail.id && (each.phonenumber == phonenumber || each.email == email));
     });
 
     if (checkConflictPrimaryEmail && checkConflictSecondaryEmail) {
@@ -243,13 +235,13 @@ async function findDuplicateOrConflict(matchingContacts: Contact[], email: strin
 }
 
 export async function identifyContact(req: Request, res: Response) {
-  const { email, phoneNumber } = req.body;
+  const { email, phonenumber } = req.body;
 
   try {
     const client = await pool.connect(); // Acquire a client from the pool
     await createContactTableIfNotExists(client);
 
-    await identifyAndProcessContact(client, email, phoneNumber, res);
+    await identifyAndProcessContact(client, email, phonenumber, res);
 
     client.release(); // Release the client back to the pool
   } catch (error) {

@@ -1,6 +1,6 @@
 export interface Contact {
   id: number;
-  phoneNumber: string;
+  phonenumber: string;
   email: string;
   linkedId: number | null;
   linkPrecedence: 'primary' | 'secondary';
