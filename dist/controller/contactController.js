@@ -4,7 +4,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.identifyContact = void 0;
-const pg_1 = require("pg");
 const dbConfig_1 = __importDefault(require("../config/dbConfig"));
 async function createContactTableIfNotExists(client) {
     const createTableQuery = `
@@ -176,7 +175,7 @@ async function identifyAndProcessContact(client, email, phoneNumber, res) {
         return res.status(200).json({
             contact: {
                 primaryContactId: primaryContact.id,
-                emails: uniqueEmails,
+                emails: [...uniqueEmails],
                 phoneNumbers: uniquePhoneNumbers,
                 secondaryContactIds: secondaryContacts.map((c) => c.id),
             },
@@ -212,21 +211,15 @@ async function findDuplicateOrConflict(matchingContacts, email, phoneNumber) {
 }
 async function identifyContact(req, res) {
     const { email, phoneNumber } = req.body;
-    let client;
     try {
-        client = new pg_1.Client(dbConfig_1.default);
-        await client.connect();
+        const client = await dbConfig_1.default.connect(); // Acquire a client from the pool
         await createContactTableIfNotExists(client);
         await identifyAndProcessContact(client, email, phoneNumber, res);
+        client.release(); // Release the client back to the pool
     }
     catch (error) {
         console.error('Error while querying the database:', error);
         res.status(500).json({ error: 'Internal server error' });
-    }
-    finally {
-        if (client) {
-            await client.end();
-        }
     }
 }
 exports.identifyContact = identifyContact;

@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
-import { Pool, Client } from 'pg';
 import { Contact } from '../model/contact';
-import dbConfig  from '../config/dbConfig';
+import { Client, PoolClient } from 'pg';
+import pool from '../config/dbConfig';
 
-async function createContactTableIfNotExists(client: Client) {
+async function createContactTableIfNotExists(client: PoolClient) {
   const createTableQuery = `
     CREATE TABLE IF NOT EXISTS Contact (
       id SERIAL PRIMARY KEY,
@@ -20,7 +20,7 @@ async function createContactTableIfNotExists(client: Client) {
   await client.query(createTableQuery);
 }
 
-async function fetchMatchingContacts(client: Client, email: string, phoneNumber: string) {
+async function fetchMatchingContacts(client: PoolClient, email: string, phoneNumber: string) {
   const query = `
     SELECT * 
     FROM Contact 
@@ -39,7 +39,7 @@ async function fetchMatchingContacts(client: Client, email: string, phoneNumber:
   }));
 }
 
-async function insertNewContact(client: Client, newContact: Contact) {
+async function insertNewContact(client: PoolClient, newContact: Contact) {
   const insertQuery = `
     INSERT INTO Contact (phoneNumber, email, linkedId, linkPrecedence, createdAt, updatedAt, deletedAt)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -60,7 +60,7 @@ async function insertNewContact(client: Client, newContact: Contact) {
   return result.rows[0].id;
 }
 
-async function updatePrimaryToSecondary(client: Client, updateContact: Contact) {
+async function updatePrimaryToSecondary(client: PoolClient, updateContact: Contact) {
   const updateQuery = `
     UPDATE Contact
     SET linkedId = $1, linkPrecedence = $2, updatedAt = $3
@@ -82,7 +82,7 @@ async function updatePrimaryToSecondary(client: Client, updateContact: Contact) 
   }
 }
 
-async function identifyAndProcessContact(client: Client, email: string, phoneNumber: string, res: Response) {
+async function identifyAndProcessContact(client: PoolClient, email: string, phoneNumber: string, res: Response) {
   // Fetch matching contacts
   const matchingContacts = await fetchMatchingContacts(client, email, phoneNumber);
 
@@ -108,7 +108,6 @@ async function identifyAndProcessContact(client: Client, email: string, phoneNum
         secondaryContactIds: [],
       }
     });
-
   }
 
   // Handle duplicate and conflict cases
@@ -203,7 +202,7 @@ async function identifyAndProcessContact(client: Client, email: string, phoneNum
     return res.status(200).json({
       contact: {
         primaryContactId: primaryContact.id,
-        emails: uniqueEmails,
+        emails: [...uniqueEmails],
         phoneNumbers: uniquePhoneNumbers,
         secondaryContactIds: secondaryContacts.map((c: { id: any; }) => c.id),
       },
@@ -245,20 +244,16 @@ async function findDuplicateOrConflict(matchingContacts: Contact[], email: strin
 
 export async function identifyContact(req: Request, res: Response) {
   const { email, phoneNumber } = req.body;
-  let client;
 
   try {
-    client = new Client(dbConfig);
-    await client.connect();
+    const client = await pool.connect(); // Acquire a client from the pool
     await createContactTableIfNotExists(client);
 
     await identifyAndProcessContact(client, email, phoneNumber, res);
+
+    client.release(); // Release the client back to the pool
   } catch (error) {
     console.error('Error while querying the database:', error);
     res.status(500).json({ error: 'Internal server error' });
-  } finally {
-    if (client) {
-      await client.end();
-    }
   }
 }
